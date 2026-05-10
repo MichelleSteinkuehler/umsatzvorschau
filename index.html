@@ -13,14 +13,6 @@
     .card { background: #fff; border: 1px solid #e0e0e0; border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
     .tarif-row { display: flex; justify-content: space-between; font-size: 0.85rem; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
     .tarif-row:last-child { border-bottom: none; }
-    .drop-area { border: 2px dashed #ccc; border-radius: 12px; padding: 2.5rem 1rem; text-align: center; cursor: pointer; transition: border-color 0.2s, background 0.2s; margin-bottom: 1rem; }
-    .drop-area:hover, .drop-area.over { border-color: #3b82f6; background: #eff6ff; }
-    .drop-area input { display: none; }
-    .drop-icon { font-size: 2rem; margin-bottom: 0.5rem; }
-    .drop-text { font-size: 0.95rem; color: #444; }
-    .drop-hint { font-size: 0.8rem; color: #888; margin-top: 0.4rem; }
-    .steps { background: #f0f7ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; font-size: 0.85rem; line-height: 1.8; color: #1e3a5f; }
-    .steps strong { font-weight: 500; }
     .error { background: #fff0f0; border: 1px solid #fcc; border-radius: 8px; padding: 0.75rem 1rem; color: #c00; font-size: 0.85rem; margin-bottom: 1rem; }
     .month-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 10px; padding: 0.85rem 1rem; margin-bottom: 0.6rem; cursor: pointer; transition: border-color 0.15s; }
     .month-card:hover { border-color: #aaa; }
@@ -43,13 +35,19 @@
     td { padding: 7px 8px; border-bottom: 1px solid #f5f5f5; vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
     .badge { font-size: 0.72rem; background: #f0f0f0; border-radius: 4px; padding: 2px 6px; color: #555; white-space: nowrap; }
+    .btn { background: #1a1a1a; color: #fff; border: none; border-radius: 8px; padding: 0.65rem 1.25rem; font-size: 0.95rem; cursor: pointer; }
+    .btn:hover { background: #333; }
     .btn-link { background: none; border: none; color: #3b82f6; cursor: pointer; font-size: 0.85rem; padding: 0; text-decoration: underline; }
     .note { font-size: 0.78rem; color: #888; margin-top: 0.75rem; }
+    .loading { text-align: center; padding: 3rem 1rem; color: #888; font-size: 0.95rem; }
   </style>
 </head>
 <body>
 <div id="app"></div>
 <script>
+const CLIENT_ID = "230766882048-ngq885knj0u945gfrkgqfifn5t1l4fje.apps.googleusercontent.com";
+const REDIRECT_URI = window.location.origin + window.location.pathname;
+
 const TARIFE_TITEL = [
   { key: "Erstgespräch lang",   betrag: 38.28 },
   { key: "Erstgespräch privat", betrag: 0     },
@@ -65,11 +63,9 @@ const BERATUNG_TARIFE = [
 function matchTarif(title, dauerMinuten) {
   if (!title) return null;
   const t = title.trim().toLowerCase();
-  // Beratung: Tarif nach Dauer bestimmen
   if (t.startsWith("beratung") && !t.includes("privat")) {
     const tarif = BERATUNG_TARIFE.find(b => b.minuten === dauerMinuten);
     if (tarif) return { key: tarif.label, betrag: tarif.betrag };
-    // Fallback: nächstpassender Tarif
     const closest = BERATUNG_TARIFE.reduce((a, b) =>
       Math.abs(b.minuten - dauerMinuten) < Math.abs(a.minuten - dauerMinuten) ? b : a
     );
@@ -94,82 +90,33 @@ function monthLabel(mk) {
   return new Date(y, m-1, 1).toLocaleString("de-DE", { month: "long", year: "numeric" });
 }
 
-// ICS Parser
-function parseICS(text) {
-  const events = [];
-  const lines = text.replace(/\r\n /g, "").replace(/\r\n\t/g, "").split(/\r?\n/);
-  let ev = null;
-  for (const line of lines) {
-    if (line === "BEGIN:VEVENT") { ev = {}; }
-    else if (line === "END:VEVENT" && ev) { events.push(ev); ev = null; }
-    else if (ev) {
-      const idx = line.indexOf(":");
-      if (idx < 0) continue;
-      const key = line.slice(0, idx).split(";")[0].toUpperCase();
-      const val = line.slice(idx + 1).trim();
-      if (key === "SUMMARY") ev.summary = val.replace(/\\,/g, ",").replace(/\\n/g, " ").replace(/\\/g, "");
-      if (key === "DTSTART") ev.dtstart = val;
-      if (key === "DTEND") ev.dtend = val;
-      if (key === "STATUS") ev.status = val;
-    }
-  }
-  return events;
-}
-
-function diffMinuten(start, end) {
-  if (!start || !end) return 0;
-  const s = parseICSDate(start);
-  const e = parseICSDate(end);
-  if (!s || !e) return 0;
-  return Math.round((e - s) / 60000);
-}
-
-function parseICSDate(str) {
-  if (!str) return null;
-  // All-day: 20240115
-  if (/^\d{8}$/.test(str)) {
-    return new Date(str.slice(0,4), str.slice(4,6)-1, str.slice(6,8));
-  }
-  // DateTime: 20240115T090000Z or 20240115T090000
-  const m = str.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/);
-  if (m) return new Date(`${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}${str.endsWith("Z") ? "Z" : ""}`);
-  return null;
-}
-
-let state = { view: "upload", error: null, months: {}, selected: null };
+let state = { view: "login", error: null, months: {}, selected: null, token: null };
 
 function render() {
   const app = document.getElementById("app");
-  if (state.view === "upload") app.innerHTML = renderUpload();
+  if (state.view === "login") app.innerHTML = renderLogin();
+  else if (state.view === "loading") app.innerHTML = renderLoading();
   else app.innerHTML = renderDashboard();
   bindEvents();
 }
 
-function renderUpload() {
+function renderLogin() {
   return `
     <h1>Umsatzvorschau</h1>
-    <p class="sub">ICS-Datei aus Google Kalender importieren</p>
+    <p class="sub">Automatisch aus deinem Google Kalender</p>
     ${state.error ? `<div class="error">${state.error}</div>` : ""}
-    <div class="steps">
-      <strong>So exportierst du deinen Kalender:</strong><br>
-      1. Öffne <strong>calendar.google.com</strong><br>
-      2. Klick oben rechts auf das ⚙️ Zahnrad → <strong>Einstellungen</strong><br>
-      3. Links: <strong>Importieren &amp; Exportieren</strong><br>
-      4. Klick auf <strong>Exportieren</strong> → eine ZIP-Datei wird heruntergeladen<br>
-      5. ZIP entpacken → die <strong>.ics-Datei</strong> hier hochladen
-    </div>
-    <div class="drop-area" id="dropArea" onclick="document.getElementById('fileInput').click()">
-      <div class="drop-icon">📅</div>
-      <div class="drop-text">ICS-Datei hier ablegen oder klicken</div>
-      <div class="drop-hint">Unterstützt .ics-Dateien aus Google Kalender</div>
-      <input type="file" id="fileInput" accept=".ics" />
-    </div>
-    <div class="card">
+    <div class="card" style="margin-bottom:1.5rem;">
       <div style="font-weight:500;font-size:.9rem;margin-bottom:.6rem;">Erkannte Termintypen</div>
       ${TARIFE_TITEL.map(t => `<div class="tarif-row"><span>${t.key}</span><span style="font-weight:500">${fmt(t.betrag)}</span></div>`).join("")}
       ${BERATUNG_TARIFE.map(t => `<div class="tarif-row"><span>${t.label}</span><span style="font-weight:500">${fmt(t.betrag)}</span></div>`).join("")}
       <div class="tarif-row" style="margin-top:6px;"><span>Rücklage</span><span style="font-weight:500">30 % des Umsatzes</span></div>
-    </div>`;
+    </div>
+    <button class="btn" onclick="startOAuth()">🔗 Mit Google Kalender verbinden</button>
+    <p class="note">Nur Lesezugriff auf deinen Kalender. Keine Daten werden gespeichert.</p>`;
+}
+
+function renderLoading() {
+  return `<h1>Umsatzvorschau</h1><div class="loading">⏳ Kalender wird geladen …</div>`;
 }
 
 function renderDashboard() {
@@ -177,9 +124,10 @@ function renderDashboard() {
   const maxU = Math.max(...keys.map(k => state.months[k].umsatz), 1);
   const sel = state.selected;
   const selData = sel ? state.months[sel] : null;
+  const now = new Date().toLocaleString("de-DE", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit" });
 
   const monthsHtml = keys.length === 0
-    ? `<div class="card">Keine passenden Termine in der ICS-Datei gefunden.<br><small style="color:#888">Prüfe ob die Terminbezeichnungen mit den Tarifnamen übereinstimmen.</small></div>`
+    ? `<div class="card">Keine passenden Termine gefunden.</div>`
     : keys.map(mk => {
         const { umsatz, ruecklage, events } = state.months[mk];
         const barW = Math.round((umsatz / maxU) * 100);
@@ -225,66 +173,99 @@ function renderDashboard() {
 
   return `
     <h1>Umsatzvorschau</h1>
-    <p class="sub">Basierend auf deiner ICS-Datei · Rücklage 30 %</p>
+    <p class="sub">Zuletzt aktualisiert: ${now} · <button class="btn-link" onclick="loadCalendar()">🔄 Aktualisieren</button></p>
     ${monthsHtml}
     ${detailHtml}
-    <p class="note" style="margin-top:1rem;"><button class="btn-link" onclick="resetApp()">← Neue Datei laden</button></p>`;
+    <p class="note" style="margin-top:1rem;"><button class="btn-link" onclick="logout()">← Abmelden</button></p>`;
 }
 
-function bindEvents() {
-  const fi = document.getElementById("fileInput");
-  const da = document.getElementById("dropArea");
-  if (fi) fi.addEventListener("change", e => handleFile(e.target.files[0]));
-  if (da) {
-    da.addEventListener("dragover", e => { e.preventDefault(); da.classList.add("over"); });
-    da.addEventListener("dragleave", () => da.classList.remove("over"));
-    da.addEventListener("drop", e => { e.preventDefault(); da.classList.remove("over"); handleFile(e.dataTransfer.files[0]); });
-  }
+function bindEvents() {}
+
+function startOAuth() {
+  const params = new URLSearchParams({
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT_URI,
+    response_type: "token",
+    scope: "https://www.googleapis.com/auth/calendar.readonly",
+  });
+  window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 }
 
-function handleFile(file) {
-  if (!file) return;
-  if (!file.name.toLowerCase().endsWith(".ics")) {
-    state.error = "Bitte eine .ics-Datei auswählen.";
-    render(); return;
-  }
-  const reader = new FileReader();
-  reader.onload = e => processICS(e.target.result);
-  reader.readAsText(file, "UTF-8");
-}
-
-function processICS(text) {
-  const evs = parseICS(text);
-  const grouped = {};
-  for (const ev of evs) {
-    if (ev.status === "CANCELLED") continue;
-    const dauer = diffMinuten(ev.dtstart, ev.dtend);
-    const tarif = matchTarif(ev.summary, dauer);
-    if (!tarif) continue;
-    const date = parseICSDate(ev.dtstart);
-    if (!date) continue;
-    const mk = monthKey(date);
-    if (!grouped[mk]) grouped[mk] = { umsatz: 0, ruecklage: 0, events: [] };
-    grouped[mk].events.push({ title: ev.summary, betrag: tarif.betrag, tarifKey: tarif.key, date });
-    grouped[mk].umsatz += tarif.betrag;
-  }
-  for (const mk of Object.keys(grouped)) {
-    grouped[mk].ruecklage = grouped[mk].umsatz * 0.3;
-  }
-  state.months = grouped;
-  state.error = null;
-  const now = new Date();
-  const ck = monthKey(now);
-  const keys = Object.keys(grouped).sort();
-  state.selected = grouped[ck] ? ck : (keys[0] || null);
-  state.view = "dashboard";
+async function loadCalendar() {
+  const token = state.token || sessionStorage.getItem("gtoken");
+  if (!token) { logout(); return; }
+  state.token = token;
+  state.view = "loading";
   render();
+  try {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    const end = new Date(now.getFullYear(), now.getMonth() + 7, 0);
+    const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+    url.searchParams.set("timeMin", start.toISOString());
+    url.searchParams.set("timeMax", end.toISOString());
+    url.searchParams.set("maxResults", "2500");
+    url.searchParams.set("singleEvents", "true");
+    url.searchParams.set("orderBy", "startTime");
+
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      sessionStorage.removeItem("gtoken");
+      throw new Error("Sitzung abgelaufen – bitte neu anmelden.");
+    }
+    const data = await res.json();
+    const grouped = {};
+    for (const ev of (data.items || [])) {
+      if (ev.status === "cancelled") continue;
+      const startStr = ev.start?.dateTime || ev.start?.date;
+      const endStr = ev.end?.dateTime || ev.end?.date;
+      const date = new Date(startStr);
+      const dauer = endStr ? Math.round((new Date(endStr) - date) / 60000) : 0;
+      const tarif = matchTarif(ev.summary, dauer);
+      if (!tarif) continue;
+      const mk = monthKey(date);
+      if (!grouped[mk]) grouped[mk] = { umsatz: 0, ruecklage: 0, events: [] };
+      grouped[mk].events.push({ title: ev.summary, betrag: tarif.betrag, tarifKey: tarif.key, date });
+      grouped[mk].umsatz += tarif.betrag;
+    }
+    for (const mk of Object.keys(grouped)) {
+      grouped[mk].ruecklage = grouped[mk].umsatz * 0.3;
+    }
+    state.months = grouped;
+    state.error = null;
+    const ck = monthKey(now);
+    const keys = Object.keys(grouped).sort();
+    state.selected = grouped[ck] ? ck : (keys[0] || null);
+    state.view = "dashboard";
+    render();
+  } catch(e) {
+    state.view = "login";
+    state.error = e.message;
+    render();
+  }
 }
 
 function selectMonth(mk) { state.selected = mk; render(); }
-function resetApp() { state = { view: "upload", error: null, months: {}, selected: null }; render(); }
 
-render();
+function logout() {
+  sessionStorage.removeItem("gtoken");
+  state = { view: "login", error: null, months: {}, selected: null, token: null };
+  render();
+}
+
+// OAuth Redirect abfangen
+const hash = new URLSearchParams(window.location.hash.replace("#",""));
+const token = hash.get("access_token");
+if (token) {
+  sessionStorage.setItem("gtoken", token);
+  window.history.replaceState(null, "", window.location.pathname);
+  state.token = token;
+  loadCalendar();
+} else {
+  const saved = sessionStorage.getItem("gtoken");
+  if (saved) { state.token = saved; loadCalendar(); }
+  else render();
+}
 </script>
 </body>
 </html>
